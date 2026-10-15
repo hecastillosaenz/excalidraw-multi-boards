@@ -157,7 +157,7 @@ Este fork está pensado para actualizarse con poco esfuerzo: casi todo el códig
 ```bash
 git remote -v                      # debe existir "upstream" -> excalidraw/excalidraw
 git fetch upstream
-git checkout feature/multi-boards
+git checkout master                # la rama principal de este fork ya incluye los tableros
 git merge upstream/master          # o: git rebase upstream/master
 ```
 

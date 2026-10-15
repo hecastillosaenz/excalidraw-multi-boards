@@ -46,6 +46,15 @@ El botón con el nombre del tablero (arriba a la izquierda) permite **volver a t
 
 ![Editor con el selector de tableros abierto](docs/images/05-editor-selector.jpg)
 
+### Ejemplo: una arquitectura de datos con iconos de AWS
+
+Un diagrama de **Data Engineering + Data Science en AWS** armado con el [MCP de Excalidraw](https://modelcontextprotocol.io) y los **iconos de AWS de la biblioteca instalada en el editor** (S3, Glue, Redshift, Athena, SageMaker, Kinesis, Lake Formation, Airflow, Lambda…). Sirve de muestra de lo que se puede dibujar y guardar como un tablero más.
+
+![Arquitectura de datos y ciencia de datos en AWS, hecha con los iconos de la biblioteca](docs/images/09-ejemplo-arquitectura-aws.png)
+
+- **Para verlo y editarlo:** importa [`docs/examples/arquitectura-data-ml-aws.excalidraw`](docs/examples/arquitectura-data-ml-aws.excalidraw) con el botón **Importar…** de la pantalla de inicio. Los iconos van incluidos en el archivo, no hace falta tener la biblioteca instalada.
+- Los iconos proceden de una biblioteca comunitaria de [libraries.excalidraw.com](https://libraries.excalidraw.com) y pertenecen a sus respectivos titulares (AWS).
+
 ## Flujo de uso
 
 ```mermaid
@@ -71,7 +80,6 @@ flowchart LR
 ```bash
 git clone https://github.com/hecastillosaenz/excalidraw-multi-boards.git
 cd excalidraw-multi-boards
-git checkout feature/multi-boards      # la rama con los tableros
 
 yarn install
 yarn start:boards
