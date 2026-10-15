@@ -4,6 +4,7 @@ import { LocalData } from "../data/LocalData";
 import * as persistence from "./boardPersistence";
 import {
   createAndOpenBoard,
+  goToHome,
   saveBoardBeforeLeaving,
   switchToBoard,
 } from "./boardSwitching";
@@ -13,19 +14,17 @@ import {
   boardSwitchingAtom,
   getActiveBoardId,
   readBoardIdFromUrl,
-  resolveDefaultBoardId,
 } from "./boardsRoute";
-
-import type * as RouteModule from "./boardsRoute";
 
 vi.mock("../data/LocalData", () => ({
   LocalData: { flushSave: vi.fn(), fileStorage: { reset: vi.fn() } },
 }));
 vi.mock("./boardPersistence", () => ({
   settleBoardSaves: vi.fn(),
+  flushBoardThumbnail: vi.fn(),
+  closeBoardSession: vi.fn(),
 }));
 vi.mock("./boardsApi", () => ({
-  listBoards: vi.fn(),
   createBoard: vi.fn(),
 }));
 
@@ -34,7 +33,7 @@ const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 const openAt = (id: string) => {
   window.history.replaceState(null, "", `/?board=${id}`);
-  appJotaiStore.set(boardRouteAtom, { status: "ready", boardId: id });
+  appJotaiStore.set(boardRouteAtom, { status: "board", boardId: id });
 };
 
 beforeEach(() => {
@@ -60,28 +59,9 @@ describe("route", () => {
     expect(window.location.hash).toBe("#frag");
   });
 
-  it("picks the most recent board when none is given, creating one only if empty", async () => {
-    vi.mocked(api.listBoards).mockResolvedValue([
-      { id: B } as Awaited<ReturnType<typeof api.listBoards>>[number],
-    ]);
-    expect(await resolveDefaultBoardId()).toBe(B);
-    expect(api.createBoard).not.toHaveBeenCalled();
-  });
-
-  it("does not create two boards when asked twice (StrictMode double effect)", async () => {
-    vi.resetModules();
-    const fresh = (await import("./boardsRoute")) as typeof RouteModule;
-    const freshApi = await import("./boardsApi");
-    vi.mocked(freshApi.listBoards).mockResolvedValue([]);
-    vi.mocked(freshApi.createBoard).mockResolvedValue({ id: A } as Awaited<
-      ReturnType<typeof freshApi.createBoard>
-    >);
-    const [first, second] = await Promise.all([
-      fresh.resolveDefaultBoardId(),
-      fresh.resolveDefaultBoardId(),
-    ]);
-    expect([first, second]).toEqual([A, A]);
-    expect(freshApi.createBoard).toHaveBeenCalledTimes(1);
+  it("shows the home screen when there is no ?board=", () => {
+    window.history.replaceState(null, "", "/");
+    expect(readBoardIdFromUrl()).toBeNull();
   });
 });
 
@@ -168,5 +148,52 @@ describe("switching", () => {
     await createAndOpenBoard();
     expect(api.createBoard).not.toHaveBeenCalled();
     expect(getActiveBoardId()).toBe(A);
+  });
+});
+
+describe("going home", () => {
+  it("saves, refreshes the thumbnail, ends the session, then drops ?board=", async () => {
+    const order: string[] = [];
+    vi.mocked(LocalData.flushSave).mockImplementation(() => {
+      order.push("flush");
+    });
+    vi.mocked(persistence.settleBoardSaves).mockImplementation(async () => {
+      order.push("settled");
+      return true;
+    });
+    vi.mocked(persistence.flushBoardThumbnail).mockImplementation(async () => {
+      order.push("thumbnail");
+    });
+    vi.mocked(persistence.closeBoardSession).mockImplementation(() => {
+      order.push("close-session");
+    });
+    const unsubscribe = appJotaiStore.sub(boardRouteAtom, () => {
+      order.push(`route:${getActiveBoardId()}`);
+    });
+
+    window.history.replaceState(null, "", `/?board=${A}&keep=1#frag`);
+    await goToHome();
+    unsubscribe();
+
+    expect(order).toEqual([
+      "flush",
+      "settled",
+      "thumbnail",
+      "close-session",
+      "route:null",
+    ]);
+    expect(appJotaiStore.get(boardRouteAtom)).toEqual({ status: "home" });
+    // only ?board= is removed
+    expect(window.location.search).toBe("?keep=1");
+    expect(window.location.hash).toBe("#frag");
+  });
+
+  it("stays on the board if it can't be saved and the user declines", async () => {
+    vi.mocked(persistence.settleBoardSaves).mockResolvedValue(false);
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    await goToHome();
+    expect(getActiveBoardId()).toBe(A);
+    expect(persistence.closeBoardSession).not.toHaveBeenCalled();
+    expect(window.location.search).toBe(`?board=${A}`);
   });
 });

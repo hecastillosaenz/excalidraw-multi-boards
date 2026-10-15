@@ -1,12 +1,17 @@
 import { appJotaiStore } from "../app-jotai";
 import { LocalData } from "../data/LocalData";
 
-import { settleBoardSaves } from "./boardPersistence";
+import {
+  closeBoardSession,
+  flushBoardThumbnail,
+  settleBoardSaves,
+} from "./boardPersistence";
 import { createBoard } from "./boardsApi";
 import {
   boardSwitchingAtom,
   getActiveBoardId,
   openBoardRoute,
+  openHomeRoute,
 } from "./boardsRoute";
 
 const SAVE_ATTEMPTS = 3;
@@ -20,6 +25,8 @@ export const saveBoardBeforeLeaving = async (): Promise<boolean> => {
   for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
     LocalData.flushSave();
     if (await settleBoardSaves()) {
+      // so the home screen shows the board as it is now
+      await flushBoardThumbnail();
       return true;
     }
   }
@@ -62,4 +69,15 @@ export const createAndOpenBoard = () =>
     const { id } = await createBoard();
     LocalData.fileStorage.reset();
     openBoardRoute(id, "push");
+  });
+
+/** Saves the open board and goes back to the boards home screen. */
+export const goToHome = () =>
+  whileSwitching(async () => {
+    if (!(await saveBoardBeforeLeaving())) {
+      return;
+    }
+    LocalData.fileStorage.reset();
+    closeBoardSession();
+    openHomeRoute("push");
   });

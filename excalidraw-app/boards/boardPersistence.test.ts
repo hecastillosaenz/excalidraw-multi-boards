@@ -10,6 +10,8 @@ import { appJotaiStore } from "../app-jotai";
 
 import {
   boardsStatusAtom,
+  closeBoardSession,
+  flushBoardThumbnail,
   flushBoardView,
   getBoardFiles,
   getSaveGeneration,
@@ -21,6 +23,7 @@ import {
 import * as api from "./boardsApi";
 import { BoardsApiError, BoardsUnreachableError } from "./boardsApi";
 import { activeBoardAtom, boardRouteAtom } from "./boardsRoute";
+import { renderThumbnail } from "./thumbnail";
 
 vi.mock("./boardsApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./boardsApi")>()),
@@ -29,7 +32,10 @@ vi.mock("./boardsApi", async (importOriginal) => ({
   createBoard: vi.fn(),
   getBoard: vi.fn(),
   saveBoard: vi.fn(),
+  putThumbnail: vi.fn(),
 }));
+
+vi.mock("./thumbnail", () => ({ renderThumbnail: vi.fn() }));
 
 const FILE = {
   id: "f1",
@@ -104,10 +110,13 @@ const loadBoard = async (viewState?: api.BoardViewState) => {
 beforeEach(() => {
   vi.mocked(api.checkHealth).mockResolvedValue({ ok: true, dir: "/data" });
   vi.mocked(api.saveBoard).mockReset();
-  appJotaiStore.set(boardRouteAtom, { status: "ready", boardId: "board-1" });
+  vi.mocked(api.putThumbnail).mockReset().mockResolvedValue(null);
+  vi.mocked(renderThumbnail).mockReset().mockResolvedValue(null);
+  appJotaiStore.set(boardRouteAtom, { status: "board", boardId: "board-1" });
 });
 
 afterEach(() => {
+  closeBoardSession(); // also cancels any pending thumbnail timer
   vi.useRealTimers();
 });
 
@@ -123,13 +132,13 @@ describe("loading", () => {
   });
 
   it("opens whichever board the route points at, not a fixed one", async () => {
-    appJotaiStore.set(boardRouteAtom, { status: "ready", boardId: "board-2" });
+    appJotaiStore.set(boardRouteAtom, { status: "board", boardId: "board-2" });
     await loadBoard();
     expect(api.getBoard).toHaveBeenLastCalledWith("board-2");
   });
 
   it("refuses to load (and to save) when no board is selected", async () => {
-    appJotaiStore.set(boardRouteAtom, { status: "ready", boardId: null });
+    appJotaiStore.set(boardRouteAtom, { status: "home" });
     const { elements } = await importFromBoardsServer();
     expect(elements).toEqual([]);
     expect(status()).toMatchObject({ kind: "load-failed", unreachable: false });
@@ -303,7 +312,7 @@ describe("switching boards", () => {
     await loadBoard();
     const madeUnderBoardA = getSaveGeneration();
 
-    appJotaiStore.set(boardRouteAtom, { status: "ready", boardId: "board-2" });
+    appJotaiStore.set(boardRouteAtom, { status: "board", boardId: "board-2" });
     await loadBoard(); // board B is now loaded
 
     // a debounced save from board A fires late: it must NOT touch board B
@@ -417,5 +426,85 @@ describe("editor preferences", () => {
     await importFromBoardsServer();
     await persistBoard(snap(1, { currentItemStrokeColor: "#f08c00" }));
     expect(localStorage.getItem(PREFS_KEY)).toBeNull();
+  });
+});
+
+describe("thumbnails", () => {
+  const PNG = new Blob(["png"], { type: "image/png" });
+
+  const saveOnce = async () => {
+    await loadBoard();
+    vi.mocked(api.saveBoard).mockResolvedValue(meta("t2"));
+    vi.mocked(renderThumbnail).mockResolvedValue(PNG);
+    expect(await persistBoard(snap(2))).toBe(true);
+  };
+
+  it("refreshes the thumbnail a few seconds after a save, not on every stroke", async () => {
+    vi.useFakeTimers();
+    await saveOnce();
+    expect(renderThumbnail).not.toHaveBeenCalled(); // throttled
+
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(renderThumbnail).toHaveBeenCalledTimes(1);
+    expect(api.putThumbnail).toHaveBeenCalledWith("board-1", PNG);
+  });
+
+  it("coalesces several saves into one thumbnail of the latest scene", async () => {
+    vi.useFakeTimers();
+    await saveOnce();
+    vi.mocked(api.saveBoard).mockResolvedValue(meta("t3"));
+    await persistBoard(snap(3));
+    await vi.advanceTimersByTimeAsync(8000);
+
+    expect(renderThumbnail).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(renderThumbnail).mock.calls[0][0].elements[0].version,
+    ).toBe(3);
+  });
+
+  it("flushBoardThumbnail renders it right away (used when leaving a board)", async () => {
+    vi.useFakeTimers();
+    await saveOnce();
+    await flushBoardThumbnail();
+    expect(api.putThumbnail).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(20_000); // the timer was cancelled
+    expect(api.putThumbnail).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not regenerate it for a camera-only change", async () => {
+    vi.useFakeTimers();
+    await loadBoard();
+    vi.mocked(api.saveBoard).mockResolvedValue(meta("t2"));
+    await persistBoard(snap(1, { scrollX: 500 }));
+    flushBoardView();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(api.saveBoard).toHaveBeenCalledTimes(1); // camera saved...
+    expect(renderThumbnail).not.toHaveBeenCalled(); // ...thumbnail untouched
+  });
+
+  it("skips empty boards (nothing to draw)", async () => {
+    await saveOnce();
+    vi.mocked(renderThumbnail).mockResolvedValue(null);
+    await flushBoardThumbnail();
+    expect(api.putThumbnail).not.toHaveBeenCalled();
+  });
+
+  it("never lets a thumbnail failure affect saving", async () => {
+    await saveOnce();
+    vi.mocked(api.putThumbnail).mockRejectedValue(
+      new BoardsUnreachableError("HTTP 500"),
+    );
+    await expect(flushBoardThumbnail()).resolves.toBeUndefined();
+    expect(status()).toEqual({ kind: "ok" });
+    expect(hasUnsavedBoardChanges()).toBe(false);
+  });
+
+  it("drops a pending thumbnail when the session is closed", async () => {
+    vi.useFakeTimers();
+    await saveOnce();
+    closeBoardSession();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(renderThumbnail).not.toHaveBeenCalled();
   });
 });

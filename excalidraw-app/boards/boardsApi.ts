@@ -99,3 +99,24 @@ export const saveBoard = (id: string, body: string, keepalive: boolean) =>
     body,
     keepalive,
   });
+
+export const renameBoard = (id: string, name: string) =>
+  request<BoardMeta>(`/boards/${id}`, jsonInit("PATCH", { name }));
+
+export const duplicateBoard = (id: string) =>
+  request<BoardMeta>(`/boards/${id}/duplicate`, { method: "POST" });
+
+/** The server moves the files to `.trash/`; nothing is ever unlinked. */
+export const deleteBoard = (id: string) =>
+  request<null>(`/boards/${id}`, { method: "DELETE" });
+
+export const putThumbnail = (id: string, png: Blob) =>
+  request<null>(`/boards/${id}/thumbnail`, {
+    method: "PUT",
+    headers: { "Content-Type": "image/png" },
+    body: png,
+  });
+
+/** `version` (the board's updatedAt) busts the browser cache after a save. */
+export const thumbnailUrl = (id: string, version: string) =>
+  `${API_BASE}/boards/${id}/thumbnail?v=${encodeURIComponent(version)}`;

@@ -31,9 +31,11 @@ import {
   BoardsUnreachableError,
   checkHealth,
   getBoard,
+  putThumbnail,
   saveBoard,
 } from "./boardsApi";
 import { activeBoardAtom, getActiveBoardId } from "./boardsRoute";
+import { renderThumbnail } from "./thumbnail";
 
 import type { BoardViewState } from "./boardsApi";
 
@@ -52,6 +54,9 @@ export const BOARDS_SAVE_TIMEOUT = 1000;
 // localStorage key so they follow you across boards; the original keys of
 // the browser are never touched.
 const PREFS_KEY = "excalidraw-boards-prefs";
+
+/** Wait before refreshing the card thumbnail after a save (S1: throttled). */
+const THUMBNAIL_DELAY_MS = 8000;
 
 const RETRY_MIN_MS = 3000;
 const RETRY_MAX_MS = 30000;
@@ -144,7 +149,57 @@ const setStatus = (next: BoardsStatus) => {
   }
 };
 
+let thumbnailTimer: ReturnType<typeof setTimeout> | null = null;
+let thumbnailJob: { id: string; snapshot: Snapshot } | null = null;
+
+// jobs run strictly one after another, so an older render can never finish
+// later and overwrite a newer thumbnail
+let thumbnailChain: Promise<void> = Promise.resolve();
+
+const runThumbnailJob = () => {
+  const job = thumbnailJob;
+  thumbnailJob = null;
+  if (!job) {
+    return thumbnailChain;
+  }
+  thumbnailChain = thumbnailChain.then(async () => {
+    try {
+      const png = await renderThumbnail(job.snapshot);
+      if (png) {
+        await putThumbnail(job.id, png);
+      }
+    } catch (error) {
+      // a missing thumbnail must never get in the way of saving
+      console.warn("[boards] could not update the thumbnail:", error);
+    }
+  });
+  return thumbnailChain;
+};
+
+/** Throttled, trailing: the latest saved scene always gets its thumbnail. */
+const scheduleThumbnail = (id: string, snapshot: Snapshot) => {
+  thumbnailJob = { id, snapshot };
+  thumbnailTimer ??= setTimeout(() => {
+    thumbnailTimer = null;
+    void runThumbnailJob();
+  }, THUMBNAIL_DELAY_MS);
+};
+
+/** Renders the pending thumbnail now (used when leaving a board). */
+export const flushBoardThumbnail = async () => {
+  if (thumbnailTimer) {
+    clearTimeout(thumbnailTimer);
+    thumbnailTimer = null;
+  }
+  await runThumbnailJob();
+};
+
 const resetState = () => {
+  if (thumbnailTimer) {
+    clearTimeout(thumbnailTimer);
+    thumbnailTimer = null;
+  }
+  thumbnailJob = null;
   generation++;
   session = null;
   appJotaiStore.set(activeBoardAtom, null);
@@ -350,6 +405,9 @@ const writeLatest = async (force: boolean) => {
     current.token = meta.updatedAt;
     savedSignature = signature;
     savedViewSignature = viewState;
+    if (sceneChanged) {
+      scheduleThumbnail(current.id, snapshot);
+    }
     retryDelay = RETRY_MIN_MS;
     if (retryTimer) {
       clearTimeout(retryTimer);
@@ -412,7 +470,14 @@ export const persistBoard = async (
 export const flushBoardView = () => {
   if (session && latest) {
     void run(true);
+    void flushBoardThumbnail();
   }
+};
+
+/** Leaves the board: nothing may be saved to it (or to another) afterwards. */
+export const closeBoardSession = () => {
+  resetState();
+  setStatus({ kind: "ok" });
 };
 
 export const getSaveGeneration = () => generation;
