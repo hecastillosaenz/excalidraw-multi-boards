@@ -1,0 +1,98 @@
+// Full-screen veil while the open board is saved before switching: blocks
+// input so nothing can be drawn into a board that is about to be replaced.
+.boards-switching-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 5rem;
+  cursor: progress;
+  background: rgba(0, 0, 0, 0.04);
+
+  span {
+    padding: 0.4rem 1rem;
+    border-radius: var(--border-radius-md, 8px);
+    background: var(--island-bg-color, #fff);
+    color: var(--text-primary-color, #1b1b1f);
+    box-shadow: var(--shadow-island, 0 2px 8px rgba(0, 0, 0, 0.2));
+    font-size: 0.875rem;
+  }
+}
+
+.boards-switcher {
+  position: relative;
+  font-size: 0.875rem;
+
+  &__button,
+  &__item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.4rem 0.7rem;
+    border: 0;
+    border-radius: var(--border-radius-lg, 8px);
+    background: transparent;
+    color: var(--text-primary-color, #1b1b1f);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--button-hover-bg, rgba(0, 0, 0, 0.06));
+    }
+  }
+
+  &__button {
+    width: auto;
+    max-width: 11rem;
+    height: var(--lg-button-size, 2.25rem);
+    background: var(--island-bg-color, #fff);
+    box-shadow: var(--shadow-island, 0 2px 8px rgba(0, 0, 0, 0.2));
+  }
+
+  &__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__menu {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    left: 0;
+    z-index: 10;
+    min-width: 13rem;
+    max-width: 18rem;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 0.3rem;
+    border-radius: var(--border-radius-lg, 8px);
+    background: var(--island-bg-color, #fff);
+    box-shadow: var(--shadow-island, 0 2px 8px rgba(0, 0, 0, 0.2));
+  }
+
+  &__item[aria-current="true"] {
+    font-weight: 600;
+  }
+
+  &__item--new {
+    margin-top: 0.2rem;
+    border-top: 1px solid var(--default-border-color, rgba(0, 0, 0, 0.1));
+    border-radius: 0 0 var(--border-radius-lg, 8px) var(--border-radius-lg, 8px);
+    color: var(--color-primary, #6965db);
+  }
+
+  &__note {
+    padding: 0.4rem 0.7rem;
+    opacity: 0.7;
+
+    &--error {
+      color: var(--color-danger, #c92a2a);
+      opacity: 1;
+    }
+  }
+}

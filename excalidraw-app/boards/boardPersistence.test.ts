@@ -12,12 +12,15 @@ import {
   boardsStatusAtom,
   flushBoardView,
   getBoardFiles,
+  getSaveGeneration,
   hasUnsavedBoardChanges,
   importFromBoardsServer,
   persistBoard,
+  settleBoardSaves,
 } from "./boardPersistence";
 import * as api from "./boardsApi";
 import { BoardsApiError, BoardsUnreachableError } from "./boardsApi";
+import { activeBoardAtom, boardRouteAtom } from "./boardsRoute";
 
 vi.mock("./boardsApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./boardsApi")>()),
@@ -100,11 +103,8 @@ const loadBoard = async (viewState?: api.BoardViewState) => {
 
 beforeEach(() => {
   vi.mocked(api.checkHealth).mockResolvedValue({ ok: true, dir: "/data" });
-  vi.mocked(api.listBoards).mockResolvedValue([
-    { ...meta("t1"), hasThumbnail: false },
-  ]);
   vi.mocked(api.saveBoard).mockReset();
-  vi.mocked(api.createBoard).mockReset();
+  appJotaiStore.set(boardRouteAtom, { status: "ready", boardId: "board-1" });
 });
 
 afterEach(() => {
@@ -112,19 +112,42 @@ afterEach(() => {
 });
 
 describe("loading", () => {
-  it("opens the most recently modified board", async () => {
+  it("opens the board named by the route and exposes its name", async () => {
     await loadBoard();
     expect(api.getBoard).toHaveBeenCalledWith("board-1");
-    expect(api.createBoard).not.toHaveBeenCalled();
     expect(status()).toEqual({ kind: "ok" });
+    expect(appJotaiStore.get(activeBoardAtom)).toEqual({
+      id: "board-1",
+      name: "Tablero 1",
+    });
   });
 
-  it("creates the first board when the folder is empty", async () => {
-    vi.mocked(api.listBoards).mockResolvedValue([]);
-    vi.mocked(api.createBoard).mockResolvedValue(meta("t0"));
+  it("opens whichever board the route points at, not a fixed one", async () => {
+    appJotaiStore.set(boardRouteAtom, { status: "ready", boardId: "board-2" });
     await loadBoard();
-    expect(api.createBoard).toHaveBeenCalledTimes(1);
-    expect(api.getBoard).toHaveBeenCalledWith("board-1");
+    expect(api.getBoard).toHaveBeenLastCalledWith("board-2");
+  });
+
+  it("refuses to load (and to save) when no board is selected", async () => {
+    appJotaiStore.set(boardRouteAtom, { status: "ready", boardId: null });
+    const { elements } = await importFromBoardsServer();
+    expect(elements).toEqual([]);
+    expect(status()).toMatchObject({ kind: "load-failed", unreachable: false });
+    expect(appJotaiStore.get(activeBoardAtom)).toBeNull();
+    expect(await persistBoard(snap(2))).toBe(false);
+  });
+
+  it("tells 'board does not exist' apart from 'server down'", async () => {
+    vi.mocked(api.getBoard).mockRejectedValue(
+      new BoardsApiError(404, "not_found", "Board x does not exist."),
+    );
+    const { appState } = await importFromBoardsServer();
+    expect(status()).toMatchObject({ kind: "load-failed", unreachable: false });
+    expect(appState?.errorMessage).toMatch(/no se guardará/);
+    expect(appState?.errorMessage).toMatch(/dirección/); // not "start the server"
+    expect(appState?.errorMessage).not.toMatch(/Inicia el servidor/);
+    expect(await persistBoard(snap(2))).toBe(false);
+    expect(api.saveBoard).not.toHaveBeenCalled();
   });
 
   it("restores the saved camera and serves the embedded images", async () => {
@@ -146,7 +169,7 @@ describe("loading", () => {
     // an empty scene + an error dialog, NOT something that can be autosaved
     expect(elements).toEqual([]);
     expect(appState?.errorMessage).toMatch(/no se guardará/);
-    expect(status().kind).toBe("load-failed");
+    expect(status()).toMatchObject({ kind: "load-failed", unreachable: true });
     expect(getBoardFiles(["f1" as FileId])).toBeNull();
 
     expect(await persistBoard(snap(5))).toBe(false);
@@ -272,5 +295,127 @@ describe("failures", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(api.saveBoard).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("switching boards", () => {
+  it("drops a save made under the previous board's generation", async () => {
+    await loadBoard();
+    const madeUnderBoardA = getSaveGeneration();
+
+    appJotaiStore.set(boardRouteAtom, { status: "ready", boardId: "board-2" });
+    await loadBoard(); // board B is now loaded
+
+    // a debounced save from board A fires late: it must NOT touch board B
+    expect(await persistBoard(snap(9), madeUnderBoardA)).toBe(false);
+    flushBoardView();
+    expect(api.saveBoard).not.toHaveBeenCalled();
+    expect(hasUnsavedBoardChanges()).toBe(false);
+  });
+
+  it("still accepts saves made under the current generation", async () => {
+    await loadBoard();
+    vi.mocked(api.saveBoard).mockResolvedValue(meta("t2"));
+    expect(await persistBoard(snap(2), getSaveGeneration())).toBe(true);
+    expect(api.saveBoard).toHaveBeenCalledTimes(1);
+  });
+
+  it("settleBoardSaves waits for the in-flight save and reports success", async () => {
+    await loadBoard();
+    let finish!: (m: ReturnType<typeof meta>) => void;
+    vi.mocked(api.saveBoard).mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+
+    const saving = persistBoard(snap(2));
+    let settled = false;
+    const waiting = settleBoardSaves().then((ok) => {
+      settled = true;
+      return ok;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false); // still waiting for the server
+
+    finish(meta("t2"));
+    await saving;
+    expect(await waiting).toBe(true);
+  });
+
+  it("settleBoardSaves reports failure when edits could not be saved", async () => {
+    await loadBoard();
+    vi.useFakeTimers();
+    vi.mocked(api.saveBoard).mockRejectedValue(
+      new BoardsUnreachableError("HTTP 500"),
+    );
+    await persistBoard(snap(2));
+    expect(await settleBoardSaves()).toBe(false);
+  });
+
+  it("settleBoardSaves is true when there is nothing to save", async () => {
+    await loadBoard();
+    expect(await settleBoardSaves()).toBe(true);
+  });
+});
+
+describe("editor preferences", () => {
+  const PREFS_KEY = "excalidraw-boards-prefs";
+
+  beforeEach(() => {
+    localStorage.removeItem(PREFS_KEY);
+  });
+
+  it("applies the stored stroke/fill preferences to any board that is opened", async () => {
+    localStorage.setItem(
+      PREFS_KEY,
+      JSON.stringify({ currentItemStrokeColor: "#e03131" }),
+    );
+    const { appState } = await loadBoard();
+    expect(appState?.currentItemStrokeColor).toBe("#e03131");
+  });
+
+  it("lets the board's own saved appState win over preferences", async () => {
+    localStorage.setItem(
+      PREFS_KEY,
+      JSON.stringify({ viewBackgroundColor: "#000" }),
+    );
+    const { appState } = await loadBoard();
+    expect(appState?.viewBackgroundColor).toBe(
+      baseAppState.viewBackgroundColor,
+    );
+  });
+
+  it("stores only currentItem* preferences, once per change, in its own key", async () => {
+    await loadBoard();
+    vi.mocked(api.saveBoard).mockResolvedValue(meta("t2"));
+    // the repo's test setup polyfills localStorage, so spy on the object itself
+    const setItem = vi.spyOn(localStorage, "setItem");
+
+    await persistBoard(snap(1, { currentItemStrokeColor: "#2f9e44" }));
+    await persistBoard(snap(1, { currentItemStrokeColor: "#2f9e44" }));
+    await persistBoard(snap(1, { currentItemStrokeColor: "#1971c2" }));
+
+    const writes = setItem.mock.calls.filter(([key]) => key === PREFS_KEY);
+    expect(writes).toHaveLength(2); // unchanged value isn't rewritten
+    const stored = JSON.parse(localStorage.getItem(PREFS_KEY)!);
+    expect(stored.currentItemStrokeColor).toBe("#1971c2");
+    expect(Object.keys(stored).every((k) => k.startsWith("currentItem"))).toBe(
+      true,
+    );
+    // the browser's original scene keys stay untouched
+    expect(setItem.mock.calls.map(([key]) => key)).not.toContain("excalidraw");
+    expect(setItem.mock.calls.map(([key]) => key)).not.toContain(
+      "excalidraw-state",
+    );
+    setItem.mockRestore();
+  });
+
+  it("does not store preferences when no board is loaded", async () => {
+    vi.mocked(api.checkHealth).mockRejectedValue(
+      new BoardsUnreachableError("HTTP 500"),
+    );
+    await importFromBoardsServer();
+    await persistBoard(snap(1, { currentItemStrokeColor: "#f08c00" }));
+    expect(localStorage.getItem(PREFS_KEY)).toBeNull();
   });
 });

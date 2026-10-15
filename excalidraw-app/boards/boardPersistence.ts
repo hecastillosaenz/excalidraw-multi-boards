@@ -30,11 +30,10 @@ import {
   BoardsApiError,
   BoardsUnreachableError,
   checkHealth,
-  createBoard,
   getBoard,
-  listBoards,
   saveBoard,
 } from "./boardsApi";
+import { activeBoardAtom, getActiveBoardId } from "./boardsRoute";
 
 import type { BoardViewState } from "./boardsApi";
 
@@ -48,19 +47,30 @@ export const BOARDS_PERSISTENCE_ENABLED = !isTestEnv();
 /** Debounce for disk saves (N3: >= 1 s; upstream's local one is 300 ms). */
 export const BOARDS_SAVE_TIMEOUT = 1000;
 
+// Editor preferences (stroke colour, width, font...) are not board content and
+// the standard .excalidraw format doesn't keep them. They live in a NEW
+// localStorage key so they follow you across boards; the original keys of
+// the browser are never touched.
+const PREFS_KEY = "excalidraw-boards-prefs";
+
 const RETRY_MIN_MS = 3000;
 const RETRY_MAX_MS = 30000;
 // fetch `keepalive` bodies are capped (~64 KB) by browsers
 const KEEPALIVE_MAX_CHARS = 60_000;
 
-export const LOAD_FAILED_DIALOG_MESSAGE =
+const LOAD_FAILED_UNREACHABLE_MESSAGE =
   "No se pudo cargar el tablero desde el servidor de tableros. " +
   "Este lienzo vacío NO es tu tablero y no se guardará nada en él. " +
   "Inicia el servidor y recarga la página.";
 
+const LOAD_FAILED_OTHER_MESSAGE =
+  "No se pudo abrir este tablero. " +
+  "Este lienzo vacío NO es tu tablero y no se guardará nada en él. " +
+  "Revisa la dirección (?board=) y recarga la página.";
+
 export type BoardsStatus =
   | { kind: "ok" }
-  | { kind: "load-failed"; detail: string }
+  | { kind: "load-failed"; detail: string; unreachable: boolean }
   | { kind: "offline" }
   | { kind: "conflict" }
   | { kind: "rejected"; detail: string };
@@ -83,6 +93,12 @@ type Session = {
 };
 
 let session: Session | null = null;
+/**
+ * Bumped whenever the loaded board changes. Every save request carries the
+ * generation it was made under, so a debounced save left over from board A can
+ * never be written into board B after a switch.
+ */
+let generation = 0;
 let latest: Snapshot | null = null;
 let savedSignature: string | null = null;
 let savedViewSignature: string | null = null;
@@ -93,6 +109,34 @@ let wantsForce = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let retryDelay = RETRY_MIN_MS;
 
+const pickPrefs = (appState: Partial<AppState>) =>
+  Object.fromEntries(
+    Object.entries(appState).filter(([key]) => key.startsWith("currentItem")),
+  ) as Partial<AppState>;
+
+const loadPrefs = (): Partial<AppState> => {
+  try {
+    return JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+};
+
+let savedPrefs: string | null = null;
+
+const savePrefs = (appState: Partial<AppState>) => {
+  const json = JSON.stringify(pickPrefs(appState));
+  if (json === savedPrefs) {
+    return;
+  }
+  try {
+    localStorage.setItem(PREFS_KEY, json);
+    savedPrefs = json;
+  } catch {
+    // preferences are a nicety: never let them break saving
+  }
+};
+
 const setStatus = (next: BoardsStatus) => {
   const current = appJotaiStore.get(boardsStatusAtom);
   if (JSON.stringify(current) !== JSON.stringify(next)) {
@@ -101,10 +145,13 @@ const setStatus = (next: BoardsStatus) => {
 };
 
 const resetState = () => {
+  generation++;
   session = null;
+  appJotaiStore.set(activeBoardAtom, null);
   latest = null;
   savedSignature = null;
   savedViewSignature = null;
+  savedPrefs = null;
   wantsRun = false;
   wantsForce = false;
   retryDelay = RETRY_MIN_MS;
@@ -148,13 +195,14 @@ export const importFromBoardsServer = async (): Promise<{
   resetState();
   try {
     await checkHealth();
-    // Phase 3: one fixed board = the most recently modified one (the list is
-    // sorted that way), created on first run. Phase 4 replaces this by ?board=.
-    const [mostRecent] = await listBoards();
-    const id = mostRecent?.id ?? (await createBoard()).id;
+    const id = getActiveBoardId();
+    if (!id) {
+      throw new Error("No hay ningún tablero seleccionado.");
+    }
     const { meta, scene } = await getBoard(id);
 
     const files = scene.files ?? {};
+    appJotaiStore.set(activeBoardAtom, { id, name: meta.name });
     session = {
       id,
       token: meta.updatedAt,
@@ -175,6 +223,7 @@ export const importFromBoardsServer = async (): Promise<{
     return {
       elements: scene.elements,
       appState: {
+        ...loadPrefs(),
         ...scene.appState,
         ...(meta.viewState && {
           scrollX: meta.viewState.scrollX,
@@ -186,13 +235,19 @@ export const importFromBoardsServer = async (): Promise<{
   } catch (error) {
     session = null;
     console.error("[boards] could not load the board:", error);
+    const unreachable = error instanceof BoardsUnreachableError;
     setStatus({
       kind: "load-failed",
       detail: error instanceof Error ? error.message : String(error),
+      unreachable,
     });
     return {
       elements: [],
-      appState: { errorMessage: LOAD_FAILED_DIALOG_MESSAGE },
+      appState: {
+        errorMessage: unreachable
+          ? LOAD_FAILED_UNREACHABLE_MESSAGE
+          : LOAD_FAILED_OTHER_MESSAGE,
+      },
     };
   }
 };
@@ -336,10 +391,15 @@ const run = (force: boolean) => {
  * @returns whether this snapshot is now on disk; only then may the caller mark
  * images as saved.
  */
-export const persistBoard = async (snapshot: Snapshot) => {
-  if (!session) {
+export const persistBoard = async (
+  snapshot: Snapshot,
+  /** generation read when the change was made (see `getSaveGeneration`) */
+  madeUnder: number = generation,
+) => {
+  if (!session || madeUnder !== generation) {
     return false;
   }
+  savePrefs(snapshot.appState);
   latest = snapshot;
   await run(false);
   return (
@@ -353,6 +413,19 @@ export const flushBoardView = () => {
   if (session && latest) {
     void run(true);
   }
+};
+
+export const getSaveGeneration = () => generation;
+
+/**
+ * Waits until no request is in flight.
+ * @returns whether the open board then has no unsaved scene edits.
+ */
+export const settleBoardSaves = async () => {
+  while (running) {
+    await running;
+  }
+  return !hasUnsavedBoardChanges();
 };
 
 /** Scene edits not yet confirmed on disk (drives the "leave site?" prompt). */

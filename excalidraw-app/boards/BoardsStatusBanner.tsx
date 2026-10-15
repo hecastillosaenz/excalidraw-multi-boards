@@ -7,11 +7,13 @@ import type { BoardsStatus } from "./boardPersistence";
 const describe = (status: Exclude<BoardsStatus, { kind: "ok" }>) => {
   switch (status.kind) {
     case "load-failed":
-      return (
-        "No se pudo cargar tu tablero: el servidor de tableros no responde.\n" +
-        "Este lienzo está vacío y NO se guardará. Inicia el servidor y recarga.\n" +
-        `(${status.detail})`
-      );
+      return status.unreachable
+        ? "No se pudo cargar tu tablero: el servidor de tableros no responde.\n" +
+            "Este lienzo está vacío y NO se guardará. Inicia el servidor y recarga.\n" +
+            `(${status.detail})`
+        : "No se pudo abrir este tablero.\n" +
+            "Este lienzo está vacío y NO se guardará. Revisa la dirección (?board=) y recarga.\n" +
+            `(${status.detail})`;
     case "offline":
       return (
         "Sin conexión con el servidor de tableros.\n" +
