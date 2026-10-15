@@ -45,6 +45,7 @@ import {
   BOARDS_SAVE_TIMEOUT,
   flushBoardView,
   getBoardFiles,
+  getSaveGeneration,
   hasBoardSession,
   persistBoard,
 } from "../boards/boardPersistence";
@@ -132,10 +133,13 @@ export class LocalData {
       appState: AppState,
       files: BinaryFiles,
       onFilesSaved: () => void,
+      boardGeneration: number, // [boards] which loaded board this change belongs to
     ) => {
       // [boards] write the board file through boards-server. Images are
       // embedded in that file, so they count as saved only once it succeeded.
-      if (!(await persistBoard({ elements, appState, files }))) {
+      if (
+        !(await persistBoard({ elements, appState, files }, boardGeneration))
+      ) {
         return;
       }
 
@@ -157,7 +161,7 @@ export class LocalData {
   ) => {
     // we need to make the `isSavePaused` check synchronously (undebounced)
     if (!this.isSavePaused()) {
-      this._save(elements, appState, files, onFilesSaved);
+      this._save(elements, appState, files, onFilesSaved, getSaveGeneration());
     }
   };
 

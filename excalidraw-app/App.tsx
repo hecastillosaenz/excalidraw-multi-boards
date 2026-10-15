@@ -136,6 +136,8 @@ import {
   hasUnsavedBoardChanges,
   importFromBoardsServer,
 } from "./boards/boardPersistence";
+import { BoardRoute } from "./boards/BoardRoute";
+import { BoardSwitcher } from "./boards/BoardSwitcher";
 import { BoardsStatusBanner } from "./boards/BoardsStatusBanner";
 import { ShareDialog, shareDialogStateAtom } from "./share/ShareDialog";
 import CollabError, { collabErrorIndicatorAtom } from "./collab/CollabError";
@@ -1021,6 +1023,10 @@ const ExcalidrawWrapper = () => {
         autoFocus={true}
         theme={editorTheme}
         onThemeChange={setAppTheme}
+        // [boards] board name + switcher in the top bar
+        renderTopLeftUI={(isMobile) =>
+          BOARDS_PERSISTENCE_ENABLED && !isMobile ? <BoardSwitcher /> : null
+        }
         renderTopRightUI={(isMobile) => {
           if (isMobile || !collabAPI || isCollabDisabled) {
             return null;
@@ -1342,9 +1348,12 @@ const ExcalidrawApp = () => {
   return (
     <TopErrorBoundary>
       <Provider store={appJotaiStore}>
-        <ExcalidrawAPIProvider>
-          <ExcalidrawWrapper />
-        </ExcalidrawAPIProvider>
+        {/* [boards] remounts the editor per board */}
+        <BoardRoute>
+          <ExcalidrawAPIProvider>
+            <ExcalidrawWrapper />
+          </ExcalidrawAPIProvider>
+        </BoardRoute>
       </Provider>
     </TopErrorBoundary>
   );
