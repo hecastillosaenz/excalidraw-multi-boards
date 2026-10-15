@@ -304,6 +304,7 @@ Decisiones tomadas después de v1.0 de este documento. Marcadas **[Decisión]**.
 - **D23 [Decisión] Un solo comando.** `yarn start:boards` (`boards-server/start.mjs`, JavaScript plano para poder avisar aunque el Node sea viejo). Sin dependencias nuevas ni cambios en `yarn.lock`. Reutiliza un servidor ya activo y se niega a continuar si el servidor no arranca.
 - **D24 [Decisión] Salida del conflicto (S2).** Ante un 409 la pestaña deja de guardar y ofrece «Guardar mis cambios como tablero nuevo» (copia de conflicto, luego «Abrir la copia») o recargar. Así no se pierde trabajo de ninguna de las dos pestañas.
 - **D25 [Decisión] Importar (S4).** Cada `.excalidraw` (botón o arrastrar) se convierte en un tablero nuevo; el archivo original no se toca. Se rechazan con mensaje claro los archivos que no son JSON, las bibliotecas de formas y los que superan 50 MB.
+- **D26 [Decisión] README del fork.** `README.md` (archivo de upstream, fuera de la lista de §8) lleva al principio un único bloque propio delimitado por comentarios `[boards]`, con capturas (`docs/images/`), flujo, advertencias y cómo usarlo. El README original queda debajo, sin cambios. Pedido expresamente por el usuario; el riesgo de conflicto al sincronizar se limita a ese bloque.
 - **Requisito de Node.** El servidor ejecuta TypeScript sin banderas, lo que exige Node >= 22.18 (o 23.6); `engines` de upstream sigue en >= 18, así que lo comprueba el lanzador.
 ---
 

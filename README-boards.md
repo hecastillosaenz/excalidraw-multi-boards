@@ -161,7 +161,7 @@ git checkout feature/multi-boards
 git merge upstream/master          # o: git rebase upstream/master
 ```
 
-1. Si hay **conflictos**, estarán en alguno de los 4 archivos de arriba. Busca `[boards]` en el archivo y conserva **ambos** lados: lo nuevo de upstream y los bloques `[boards]`.
+1. Si hay **conflictos**, estarán en alguno de los 4 archivos de arriba o en `README.md`. En `README.md` conserva el README nuevo de upstream **debajo** y deja intacto el bloque propio del fork (entre `<!-- [boards] INICIO … -->` y `<!-- [boards] FIN … -->`). Busca `[boards]` en el archivo y conserva **ambos** lados: lo nuevo de upstream y los bloques `[boards]`.
 2. `yarn install`
 3. Comprueba que todo sigue bien:
 
@@ -175,7 +175,7 @@ git merge upstream/master          # o: git rebase upstream/master
    git diff upstream/master --stat
    ```
 
-   Debe mostrar únicamente los 4 archivos originales de la tabla anterior, más las carpetas nuevas (`boards-server/`, `excalidraw-app/boards/`), este README y `docs/`.
+   Debe mostrar únicamente los 4 archivos originales de la tabla anterior, `README.md` (solo el bloque que va entre los marcadores `[boards]` al principio), más las carpetas nuevas (`boards-server/`, `excalidraw-app/boards/`), este README y `docs/`.
 
 5. Prueba a mano: `yarn start:boards`, abre un tablero con imágenes y vuelve al inicio.
 
