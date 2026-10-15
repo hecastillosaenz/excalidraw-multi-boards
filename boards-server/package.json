@@ -1,0 +1,6 @@
+{
+  "name": "boards-server",
+  "private": true,
+  "type": "module",
+  "description": "Local file-backed boards API for the multi-boards fork. Not a yarn workspace."
+}
