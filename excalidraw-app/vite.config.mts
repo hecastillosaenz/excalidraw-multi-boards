@@ -17,6 +17,13 @@ export default defineConfig(({ mode }) => {
       port: Number(envVars.VITE_APP_PORT || 3000),
       // open the browser
       open: true,
+      // [boards] boards-server lives on its own fixed port (BOARDS_PORT); the
+      // browser only ever talks to this origin, so no CORS and no port leaks
+      proxy: {
+        "/api": {
+          target: `http://127.0.0.1:${process.env.BOARDS_PORT || 3100}`,
+        },
+      },
     },
     // We need to specify the envDir since now there are no
     //more located in parallel with the vite.config.ts file but in parent dir

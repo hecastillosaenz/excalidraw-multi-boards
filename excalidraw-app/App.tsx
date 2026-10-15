@@ -130,6 +130,13 @@ import {
   localStorageQuotaExceededAtom,
 } from "./data/LocalData";
 import { isBrowserStorageStateNewer } from "./data/tabSync";
+// [boards]
+import {
+  BOARDS_PERSISTENCE_ENABLED,
+  hasUnsavedBoardChanges,
+  importFromBoardsServer,
+} from "./boards/boardPersistence";
+import { BoardsStatusBanner } from "./boards/BoardsStatusBanner";
 import { ShareDialog, shareDialogStateAtom } from "./share/ShareDialog";
 import CollabError, { collabErrorIndicatorAtom } from "./collab/CollabError";
 import { useHandleAppTheme } from "./useHandleAppTheme";
@@ -223,14 +230,22 @@ const initializeScene = async (opts: {
     | { isExternalScene: false; id?: null; key?: null }
   )
 > => {
-  const searchParams = new URLSearchParams(window.location.search);
+  // [boards] share / room links are out of scope in boards mode (they would
+  // also rewrite the URL); `?board=` is read elsewhere
+  const searchParams = new URLSearchParams(
+    BOARDS_PERSISTENCE_ENABLED ? "" : window.location.search,
+  );
   const id = searchParams.get("id");
-  const jsonBackendMatch = window.location.hash.match(
+  const externalHash = BOARDS_PERSISTENCE_ENABLED ? "" : window.location.hash;
+  const jsonBackendMatch = externalHash.match(
     /^#json=([a-zA-Z0-9_-]+),([a-zA-Z0-9_-]+)$/,
   );
-  const externalUrlMatch = window.location.hash.match(/^#url=(.*)$/);
+  const externalUrlMatch = externalHash.match(/^#url=(.*)$/);
 
-  const localDataState = importFromLocalStorage();
+  // [boards] the scene comes from boards-server instead of localStorage
+  const localDataState = BOARDS_PERSISTENCE_ENABLED
+    ? await importFromBoardsServer()
+    : importFromLocalStorage();
 
   let scene: Omit<
     RestoredDataState,
@@ -247,7 +262,9 @@ const initializeScene = async (opts: {
     appState: restoreAppState(localDataState?.appState, null),
   };
 
-  let roomLinkData = getCollaborationLinkData(window.location.href);
+  let roomLinkData = BOARDS_PERSISTENCE_ENABLED // [boards]
+    ? null
+    : getCollaborationLinkData(window.location.href);
   const isExternalScene = !!(id || jsonBackendMatch || roomLinkData);
   if (isExternalScene) {
     if (
@@ -548,9 +565,13 @@ const ExcalidrawWrapper = () => {
           }
           // on fresh load, clear unused files from IDB (from previous
           // session)
-          LocalData.fileStorage.clearObsoleteFiles({
-            currentFileIds: fileIds,
-          });
+          // [boards] images live inside each board file; this routine would
+          // purge the other boards' images from the shared IDB (risk R2)
+          if (!BOARDS_PERSISTENCE_ENABLED) {
+            LocalData.fileStorage.clearObsoleteFiles({
+              currentFileIds: fileIds,
+            });
+          }
         }
       }
     },
@@ -569,6 +590,11 @@ const ExcalidrawWrapper = () => {
 
     const onHashChange = async (event: HashChangeEvent) => {
       event.preventDefault();
+      // [boards] reloading the scene here would replace the open board with an
+      // empty one (and autosave would then write it to disk)
+      if (BOARDS_PERSISTENCE_ENABLED) {
+        return;
+      }
       const libraryUrlTokens = parseLibraryTokensFromUrl();
       if (!libraryUrlTokens) {
         if (
@@ -595,7 +621,9 @@ const ExcalidrawWrapper = () => {
     };
 
     const syncData = debounce(() => {
-      if (isTestEnv()) {
+      // [boards] tab sync pulls from localStorage, which is no longer the
+      // source of truth; it could replace the board with stale browser data
+      if (isTestEnv() || BOARDS_PERSISTENCE_ENABLED) {
         return;
       }
       if (
@@ -693,9 +721,10 @@ const ExcalidrawWrapper = () => {
 
       if (
         excalidrawAPI &&
-        LocalData.fileStorage.shouldPreventUnload(
+        (LocalData.fileStorage.shouldPreventUnload(
           excalidrawAPI.getSceneElements(),
-        )
+        ) ||
+          hasUnsavedBoardChanges()) // [boards] edits not yet confirmed on disk
       ) {
         if (import.meta.env.VITE_APP_DISABLE_PREVENT_UNLOAD !== "true") {
           preventUnload(event);
@@ -1067,6 +1096,8 @@ const ExcalidrawWrapper = () => {
             {t("alerts.collabOfflineWarning")}
           </div>
         )}
+        {/* [boards] */}
+        <BoardsStatusBanner />
         {localStorageQuotaExceeded && (
           <div className="alert alert--danger">
             {t("alerts.localStorageQuotaExceeded")}

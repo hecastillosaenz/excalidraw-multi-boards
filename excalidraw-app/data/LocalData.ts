@@ -39,7 +39,15 @@ import type {
 import type { MaybePromise } from "@excalidraw/common/utility-types";
 
 import { appJotaiStore, atom } from "../app-jotai";
-import { SAVE_TO_LOCAL_STORAGE_TIMEOUT, STORAGE_KEYS } from "../app_constants";
+import { STORAGE_KEYS } from "../app_constants";
+// [boards] persistence goes to disk through boards-server, see boards/
+import {
+  BOARDS_SAVE_TIMEOUT,
+  flushBoardView,
+  getBoardFiles,
+  hasBoardSession,
+  persistBoard,
+} from "../boards/boardPersistence";
 
 import { FileManager } from "./FileManager";
 import { FileStatusStore } from "./fileStatusStore";
@@ -70,6 +78,9 @@ class LocalFileManager extends FileManager {
   };
 }
 
+// [boards] no longer called: writing here would overwrite the user's original
+// browser data. Kept (not deleted) to keep the diff against upstream small.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const saveDataStateToLocalStorage = (
   elements: readonly ExcalidrawElement[],
   appState: AppState,
@@ -122,7 +133,11 @@ export class LocalData {
       files: BinaryFiles,
       onFilesSaved: () => void,
     ) => {
-      saveDataStateToLocalStorage(elements, appState);
+      // [boards] write the board file through boards-server. Images are
+      // embedded in that file, so they count as saved only once it succeeded.
+      if (!(await persistBoard({ elements, appState, files }))) {
+        return;
+      }
 
       await this.fileStorage.saveFiles({
         elements,
@@ -130,7 +145,7 @@ export class LocalData {
       });
       onFilesSaved();
     },
-    SAVE_TO_LOCAL_STORAGE_TIMEOUT,
+    BOARDS_SAVE_TIMEOUT, // [boards] was SAVE_TO_LOCAL_STORAGE_TIMEOUT (300 ms)
   );
 
   /** Saves DataState, including files. Bails if saving is paused */
@@ -148,6 +163,7 @@ export class LocalData {
 
   static flushSave = () => {
     this._save.flush();
+    flushBoardView(); // [boards] also persist a camera-only change
   };
 
   private static locker = new Locker<SavingLockTypes>();
@@ -169,6 +185,11 @@ export class LocalData {
   static fileStorage = new LocalFileManager({
     onFileStatusChange: FileStatusStore.updateStatuses.bind(FileStatusStore),
     getFiles(ids) {
+      // [boards] images come embedded in the board loaded from the server
+      const boardFiles = getBoardFiles(ids);
+      if (boardFiles) {
+        return Promise.resolve(boardFiles);
+      }
       return getMany(ids, filesStore).then(
         async (filesData: (BinaryFileData | undefined)[]) => {
           const loadedFiles: BinaryFileData[] = [];
@@ -202,6 +223,10 @@ export class LocalData {
       );
     },
     async saveFiles({ addedFiles }) {
+      // [boards] already stored inside the board file; nothing to write here
+      if (hasBoardSession()) {
+        return { savedFiles: new Map(addedFiles), erroredFiles: new Map() };
+      }
       const savedFiles = new Map<FileId, BinaryFileData>();
       const erroredFiles = new Map<FileId, BinaryFileData>();
 
