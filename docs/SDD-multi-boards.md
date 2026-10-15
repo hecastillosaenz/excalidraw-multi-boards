@@ -79,7 +79,7 @@ Verificado leyendo `excalidraw-app/data/LocalData.ts` en la rama `master` del re
 ## 4. Requisitos
 
 ### 4.1 Funcionales (MUST)
-- **F1** Pantalla de inicio con cuadrícula de tarjetas: miniatura, nombre, fecha de modificación.
+- **F1** Pantalla de inicio (sin `?board=`) con **vista de lista por defecto** (estilo Miro: título, fecha de creación, última modificación, menú ⋮ por fila) y **vista de cuadrícula** de tarjetas con miniatura. *(Revisado en Fase 5 a petición del usuario; ver §13, D13.)*
 - **F2** Crear tablero (nombre por defecto "Tablero N", editable).
 - **F3** Abrir tablero con clic; la URL pasa a `?board=<id>`.
 - **F4** Renombrar tablero (desde inicio y desde el editor).
@@ -160,9 +160,13 @@ Errores: JSON `{ error: "codigo", message: "..." }` con estados HTTP correctos. 
 
 ### 5.5 Cliente: capa `excalidraw-app/boards/` (código nuevo)
 - `boardsApi.ts` — cliente `fetch` tipado de la API.
-- `boardsStore.ts` — estado de tableros (usa **Jotai**, ya presente en la app, `app-jotai`; confirma en Fase 0) y tablero activo (`?board=`).
-- `BoardsHome.tsx` — pantalla de inicio (F1–F6).
-- `BoardSwitcher.tsx` — control en la barra del editor (F7, F4).
+- `boardsRoute.ts` — qué pantalla se muestra: `?board=<id>` o inicio; átomos de **Jotai** (`app-jotai`, confirmado en Fase 0).
+- `boardPersistence.ts` — carga y guardado en disco del tablero abierto (un solo envío a la vez, reintentos, 409, generación, preferencias, miniaturas).
+- `boardSwitching.ts` — guardar-antes-de-salir, cambiar de tablero, crear y volver al inicio.
+- `BoardRoute.tsx` — monta inicio o editor (con `key` por tablero); maneja atrás/adelante.
+- `BoardsHome.tsx` + `BoardsHome.scss` — pantalla de inicio (F1–F6, S3).
+- `BoardSwitcher.tsx` — atajo en la barra del editor (F7, F4).
+- `BoardsStatusBanner.tsx`, `BoardsWelcomeScreen.tsx` — aviso de guardado y texto de bienvenida correcto.
 - `thumbnail.ts` — genera PNG con la utilidad de exportación del editor (S1).
 
 ### 5.6 Cliente: adaptación del guardado/carga (cambios en archivos existentes)
@@ -280,6 +284,23 @@ Regla: dentro de esos archivos, cambios **mínimos y localizados**, con comentar
 - Empaquetado como app de escritorio (Tauri/Electron) para eliminar el servidor aparte.
 - Versionado/historial de tableros y sincronización entre dispositivos (p. ej. la carpeta dentro de Dropbox/Drive).
 - Estructura de carpetas/etiquetas para organizar tableros.
+
+---
+
+## 13. Cambios de diseño durante la implementación
+
+Decisiones tomadas después de v1.0 de este documento. Marcadas **[Decisión]**.
+
+- **D13 [Decisión] Inicio en lista (Fase 5).** El usuario aportó una referencia de Miro: quiere *gestionar* tableros con título, fecha de creación y última modificación, no un desplegable. La pantalla de inicio es una tabla (Nombre · Creado · Última modificación · ⋮) con vista de cuadrícula opcional, búsqueda sin acentos y orden (modificación, creación, nombre). Se descartó lo que no aplica a uso local de una persona (propietario, usuarios en línea, solo lectura, favoritos). El desplegable del editor queda como atajo (volver, renombrar, saltar, nuevo).
+- **D14 [Decisión] Renombrar no toca `updatedAt`.** Es el token de concurrencia (409); cambiarlo daría falsos conflictos en el editor abierto.
+- **D15 [Decisión] Cambio de tablero por remontaje.** El editor y su proveedor de API se montan con `key` = id de tablero. Reinicia historial y estado sin tocar internos (R7).
+- **D16 [Decisión] Generación de guardado.** Cada guardado lleva el número de generación del tablero en que se hizo; uno pendiente de A nunca puede escribirse en B.
+- **D17 [Decisión] Nunca se escribe en el `localStorage` original.** Si la carga falla no se guarda en ningún sitio. Las preferencias del editor (`currentItem*`) viven en su propia clave `excalidraw-boards-prefs`.
+- **D18 [Decisión] Viewport en el meta.** Zoom y scroll van en `<id>.meta.json` (`viewState`); el `.excalidraw` conserva el formato estándar. Solo se guardan al salir/perder foco, no en cada desplazamiento.
+- **D19 [Decisión] Miniaturas.** Se regeneran ~8 s después de un guardado de contenido y siempre al salir del tablero; en serie para que una antigua no pise a una nueva.
+- **D20 [Decisión] Servidor sin dependencias, pruebas aparte.** `boards-server/` usa solo Node. Su suite se llama `*.integration.ts` con configuración propia (`yarn test:boards`), porque el `setupTests.ts` raíz asume jsdom.
+- **D21 [Decisión] Texto de bienvenida propio.** El original afirma que los dibujos viven en el almacenamiento del navegador; se sustituye por `BoardsWelcomeScreen` sin tocar el archivo de upstream.
+- **D22 [Decisión] Seguridad extra del servidor.** Rechaza `Origin` ajeno y `Host` no local (CSRF / DNS rebinding).
 
 ---
 
