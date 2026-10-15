@@ -70,6 +70,8 @@
     "test:code": "eslint --max-warnings=0 --ext .js,.ts,.tsx .",
     "test:other": "yarn prettier --list-different",
     "test:typecheck": "tsc",
+    "test:boards": "vitest run --config boards-server/vitest.config.mts",
+    "test:boards:typecheck": "tsc -p boards-server",
     "test:update": "yarn test:app --update --watch=false",
     "test": "yarn test:app",
     "test:coverage": "vitest --coverage",
