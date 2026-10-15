@@ -82,8 +82,15 @@ export const checkHealth = () => request<{ ok: true; dir: string }>("/health");
 
 export const listBoards = () => request<BoardListItem[]>("/boards");
 
-export const createBoard = (name?: string) =>
-  request<BoardMeta>("/boards", jsonInit("POST", name ? { name } : {}));
+/** With `scene` the board starts from it (used by conflict copies and import). */
+export const createBoard = (name?: string, scene?: unknown) =>
+  request<BoardMeta>(
+    "/boards",
+    jsonInit("POST", {
+      ...(name ? { name } : {}),
+      ...(scene === undefined ? {} : { scene }),
+    }),
+  );
 
 export const getBoard = (id: string) =>
   request<{ meta: BoardMeta; scene: BoardScene }>(`/boards/${id}`);

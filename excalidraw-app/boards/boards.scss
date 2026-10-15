@@ -114,3 +114,37 @@
     }
   }
 }
+
+// The conflict notice has buttons, so unlike the plain `.alert` it must
+// receive clicks.
+.excalidraw-app .alert.boards-banner {
+  pointer-events: auto;
+}
+
+.boards-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  white-space: normal;
+
+  button {
+    padding: 0.35rem 0.8rem;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.18);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.32);
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+  }
+}

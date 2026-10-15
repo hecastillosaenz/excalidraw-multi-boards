@@ -94,12 +94,48 @@ const isDarkTheme = () => {
   return false;
 };
 
+/** A problem with a file the user picked, already worded for them. */
+class ImportError extends Error {}
+
+/** The server refuses bodies above this (see boards-server MAX_BODY_BYTES). */
+const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
+
 const describeError = (error: unknown) =>
-  error instanceof BoardsApiError
+  error instanceof ImportError
+    ? error.message
+    : error instanceof BoardsApiError
     ? error.message || error.code
     : error instanceof BoardsUnreachableError
     ? "El servidor de tableros no responde."
     : "Ocurrió un error inesperado.";
+
+/**
+ * Reads a `.excalidraw` file into a scene. The server re-validates it; these
+ * checks only exist to give clear Spanish messages for the common mistakes.
+ */
+const readSceneFile = async (file: File) => {
+  if (file.size > MAX_IMPORT_BYTES) {
+    throw new ImportError(`«${file.name}» es demasiado grande (máximo 50 MB).`);
+  }
+  let scene: unknown;
+  try {
+    scene = JSON.parse(await file.text());
+  } catch {
+    throw new ImportError(`«${file.name}» no es un archivo JSON válido.`);
+  }
+  const type = (scene as { type?: unknown } | null)?.type;
+  if (type === "excalidrawlib") {
+    throw new ImportError(
+      `«${file.name}» es una biblioteca de formas, no un tablero.`,
+    );
+  }
+  if (type !== "excalidraw" || !Array.isArray((scene as any).elements)) {
+    throw new ImportError(
+      `«${file.name}» no tiene el formato de un tablero de Excalidraw.`,
+    );
+  }
+  return scene;
+};
 
 // ---------------------------------------------------------------------------
 // icons (inline: the home screen doesn't load the editor's icon set)
@@ -380,6 +416,7 @@ export const BoardsHome = () => {
     null,
   );
   const [busy, setBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{
     kind: "info" | "error";
     text: string;
@@ -434,6 +471,38 @@ export const BoardsHome = () => {
     act(async () => {
       const { id } = await createBoard();
       openBoardRoute(id, "push"); // straight into the new board
+    });
+
+  /** S4: each file becomes a NEW board; the originals are never touched. */
+  const importFiles = (files: File[]) =>
+    act(async () => {
+      const imported: string[] = [];
+      const failed: string[] = [];
+      for (const file of files) {
+        try {
+          const scene = await readSceneFile(file);
+          const name =
+            file.name
+              .replace(/\.(excalidraw|json)$/i, "")
+              .trim()
+              .slice(0, 200) || undefined;
+          imported.push((await createBoard(name, scene)).name);
+        } catch (error) {
+          if (!(error instanceof ImportError)) {
+            throw error; // server trouble: stop and report it
+          }
+          failed.push(error.message);
+        }
+      }
+      if (failed.length && !imported.length) {
+        throw new ImportError(failed.join("\n"));
+      }
+      return [
+        imported.length === 1
+          ? `Se importó «${imported[0]}».`
+          : `Se importaron ${imported.length} tableros.`,
+        ...failed,
+      ].join(" ");
     });
 
   const duplicate = (board: BoardListItem) =>
@@ -509,18 +578,53 @@ export const BoardsHome = () => {
     count === 1 ? "1 elemento" : `${count} elementos`;
 
   return (
-    <div className={`boards-home${isDarkTheme() ? " boards-home--dark" : ""}`}>
+    <div
+      className={`boards-home${isDarkTheme() ? " boards-home--dark" : ""}`}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        event.preventDefault();
+        const files = Array.from(event.dataTransfer?.files ?? []);
+        if (files.length && !busy && loadError === null) {
+          importFiles(files);
+        }
+      }}
+    >
       <main className="boards-home__inner">
         <header className="boards-home__header">
           <h1>Mis tableros</h1>
-          <button
-            type="button"
-            className="boards-button boards-button--primary"
-            onClick={create}
-            disabled={busy || loadError !== null}
-          >
-            <Icon path={ICONS.plus} /> Crear nuevo
-          </button>
+          <div className="boards-home__header-actions">
+            <button
+              type="button"
+              className="boards-button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || loadError !== null}
+            >
+              Importar…
+            </button>
+            <button
+              type="button"
+              className="boards-button boards-button--primary"
+              onClick={create}
+              disabled={busy || loadError !== null}
+            >
+              <Icon path={ICONS.plus} /> Crear nuevo
+            </button>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".excalidraw,application/json"
+            multiple
+            hidden
+            aria-label="Importar archivos .excalidraw"
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = ""; // so the same file can be picked again
+              if (files.length) {
+                importFiles(files);
+              }
+            }}
+          />
         </header>
 
         {loadError !== null ? (
@@ -532,7 +636,7 @@ export const BoardsHome = () => {
             </h2>
             <p>
               {loadError instanceof BoardsUnreachableError
-                ? "Inicia el servidor de tableros y pulsa Reintentar. No se ha perdido nada: tus tableros siguen guardados en tu carpeta de datos."
+                ? "Inicia el servidor con «yarn start:boards» y pulsa Reintentar. No se ha perdido nada: tus tableros siguen guardados en tu carpeta de datos."
                 : describeError(loadError)}
             </p>
             <button type="button" className="boards-button" onClick={load}>

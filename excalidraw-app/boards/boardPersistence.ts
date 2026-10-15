@@ -30,6 +30,7 @@ import {
   BoardsApiError,
   BoardsUnreachableError,
   checkHealth,
+  createBoard,
   getBoard,
   putThumbnail,
   saveBoard,
@@ -66,7 +67,7 @@ const KEEPALIVE_MAX_CHARS = 60_000;
 const LOAD_FAILED_UNREACHABLE_MESSAGE =
   "No se pudo cargar el tablero desde el servidor de tableros. " +
   "Este lienzo vacío NO es tu tablero y no se guardará nada en él. " +
-  "Inicia el servidor y recarga la página.";
+  "Cierra esta pestaña, ejecuta «yarn start:boards» y vuelve a abrir la app.";
 
 const LOAD_FAILED_OTHER_MESSAGE =
   "No se pudo abrir este tablero. " +
@@ -472,6 +473,37 @@ export const flushBoardView = () => {
     void run(true);
     void flushBoardThumbnail();
   }
+};
+
+/**
+ * Conflict way out: stores what this tab has (which the server refused to
+ * overwrite) as a NEW board, so no work is lost.
+ */
+export const saveLatestAsNewBoard = async () => {
+  if (!latest) {
+    throw new Error("No hay cambios que guardar.");
+  }
+  const scene = JSON.parse(
+    serializeAsJSON(
+      getNonDeletedElements(latest.elements),
+      latest.appState,
+      latest.files,
+      "local",
+    ),
+  );
+  const current = appJotaiStore.get(activeBoardAtom);
+  return createBoard(
+    `${current?.name ?? "Tablero"} (copia de conflicto)`,
+    scene,
+  );
+};
+
+/**
+ * The user chose to keep their edits elsewhere (or drop them): stop treating
+ * them as unsaved so leaving the page doesn't warn about them any more.
+ */
+export const discardUnsavedBoardEdits = () => {
+  latest = null;
 };
 
 /** Leaves the board: nothing may be saved to it (or to another) afterwards. */

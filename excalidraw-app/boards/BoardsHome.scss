@@ -41,6 +41,11 @@
     padding: 2rem 1.5rem 4rem;
   }
 
+  &__header-actions {
+    display: flex;
+    gap: 0.6rem;
+  }
+
   &__header {
     display: flex;
     align-items: center;

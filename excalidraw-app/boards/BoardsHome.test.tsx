@@ -13,6 +13,18 @@ import * as api from "./boardsApi";
 import { BoardsApiError, BoardsUnreachableError } from "./boardsApi";
 import { boardRouteAtom, getActiveBoardId } from "./boardsRoute";
 
+// jsdom has no Blob#text() (every real browser does); test-only stand-in
+if (!File.prototype.text) {
+  File.prototype.text = function text(this: File) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(this);
+    });
+  };
+}
+
 vi.mock("./boardsApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./boardsApi")>()),
   listBoards: vi.fn(),
@@ -347,11 +359,104 @@ describe("server problems", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/No se pudo conectar con el servidor/);
     expect(alert).toHaveTextContent(/No se ha perdido nada/);
+    expect(alert).toHaveTextContent("yarn start:boards"); // tells how to fix it
     // no way to create while we can't reach the server
     expect(screen.getByRole("button", { name: /Crear nuevo/ })).toBeDisabled();
 
     vi.mocked(api.listBoards).mockResolvedValue(BOARDS);
     fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
     expect(await screen.findByText("Árbol")).toBeInTheDocument();
+  });
+});
+
+describe("import (.excalidraw files)", () => {
+  const scene = { type: "excalidraw", version: 2, elements: [{ id: "a" }] };
+  const fileOf = (name: string, content: unknown) =>
+    new File(
+      [typeof content === "string" ? content : JSON.stringify(content)],
+      name,
+    );
+  const pick = (...files: File[]) =>
+    fireEvent.change(screen.getByLabelText("Importar archivos .excalidraw"), {
+      target: { files },
+    });
+
+  it("turns a file into a NEW board named after it", async () => {
+    vi.mocked(api.createBoard).mockResolvedValue({
+      name: "Mi dibujo",
+    } as api.BoardMeta);
+    await renderHome();
+    pick(fileOf("Mi dibujo.excalidraw", scene));
+
+    expect(
+      await screen.findByText("Se importó «Mi dibujo»."),
+    ).toBeInTheDocument();
+    expect(api.createBoard).toHaveBeenCalledWith("Mi dibujo", scene);
+    expect(api.listBoards).toHaveBeenCalledTimes(2); // list refreshed
+  });
+
+  it("explains the common mistakes in plain words and creates nothing", async () => {
+    await renderHome();
+
+    pick(fileOf("roto.excalidraw", "{ no es json"));
+    expect(
+      await screen.findByText(/no es un archivo JSON válido/),
+    ).toBeInTheDocument();
+
+    pick(
+      fileOf("formas.excalidrawlib", { type: "excalidrawlib", library: [] }),
+    );
+    expect(
+      await screen.findByText(/biblioteca de formas, no un tablero/),
+    ).toBeInTheDocument();
+
+    pick(fileOf("otro.json", { hola: "mundo" }));
+    expect(
+      await screen.findByText(/no tiene el formato de un tablero/),
+    ).toBeInTheDocument();
+
+    expect(api.createBoard).not.toHaveBeenCalled();
+  });
+
+  it("imports several files and still reports the one that failed", async () => {
+    vi.mocked(api.createBoard)
+      .mockResolvedValueOnce({ name: "uno" } as api.BoardMeta)
+      .mockResolvedValueOnce({ name: "dos" } as api.BoardMeta);
+    await renderHome();
+    pick(
+      fileOf("uno.excalidraw", scene),
+      fileOf("malo.excalidraw", "nope"),
+      fileOf("dos.excalidraw", scene),
+    );
+
+    const note = await screen.findByText(/Se importaron 2 tableros\./);
+    expect(note).toHaveTextContent(
+      /«malo\.excalidraw» no es un archivo JSON válido/,
+    );
+    expect(api.createBoard).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces a server failure instead of pretending it worked", async () => {
+    vi.mocked(api.createBoard).mockRejectedValue(
+      new BoardsUnreachableError("HTTP 500"),
+    );
+    await renderHome();
+    pick(fileOf("x.excalidraw", scene));
+    expect(
+      await screen.findByText("El servidor de tableros no responde."),
+    ).toBeInTheDocument();
+  });
+
+  it("also accepts files dropped on the screen", async () => {
+    vi.mocked(api.createBoard).mockResolvedValue({
+      name: "soltado",
+    } as api.BoardMeta);
+    await renderHome();
+    fireEvent.drop(screen.getByRole("main"), {
+      dataTransfer: { files: [fileOf("soltado.excalidraw", scene)] },
+    });
+    await waitFor(() =>
+      expect(api.createBoard).toHaveBeenCalledWith("soltado", scene),
+    );
   });
 });

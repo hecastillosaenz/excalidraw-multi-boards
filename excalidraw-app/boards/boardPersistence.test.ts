@@ -2,6 +2,7 @@ import {
   cleanAppStateForExport,
   getDefaultAppState,
 } from "@excalidraw/excalidraw/appState";
+import { loadFromBlob } from "@excalidraw/excalidraw/data/blob";
 
 import type { ExcalidrawElement, FileId } from "@excalidraw/element/types";
 import type { AppState, BinaryFileData } from "@excalidraw/excalidraw/types";
@@ -11,6 +12,7 @@ import { appJotaiStore } from "../app-jotai";
 import {
   boardsStatusAtom,
   closeBoardSession,
+  discardUnsavedBoardEdits,
   flushBoardThumbnail,
   flushBoardView,
   getBoardFiles,
@@ -18,6 +20,7 @@ import {
   hasUnsavedBoardChanges,
   importFromBoardsServer,
   persistBoard,
+  saveLatestAsNewBoard,
   settleBoardSaves,
 } from "./boardPersistence";
 import * as api from "./boardsApi";
@@ -178,6 +181,7 @@ describe("loading", () => {
     // an empty scene + an error dialog, NOT something that can be autosaved
     expect(elements).toEqual([]);
     expect(appState?.errorMessage).toMatch(/no se guardará/);
+    expect(appState?.errorMessage).toMatch(/yarn start:boards/);
     expect(status()).toMatchObject({ kind: "load-failed", unreachable: true });
     expect(getBoardFiles(["f1" as FileId])).toBeNull();
 
@@ -506,5 +510,84 @@ describe("thumbnails", () => {
     closeBoardSession();
     await vi.advanceTimersByTimeAsync(20_000);
     expect(renderThumbnail).not.toHaveBeenCalled();
+  });
+});
+
+describe("conflict way out", () => {
+  const conflict = async () => {
+    await loadBoard();
+    vi.mocked(api.saveBoard).mockRejectedValue(
+      new BoardsApiError(409, "conflict", "changed on disk"),
+    );
+    await persistBoard(snap(5)); // this tab's work, refused by the server
+    expect(status()).toEqual({ kind: "conflict" });
+  };
+
+  it("keeps this tab's work as a new board, images included", async () => {
+    await conflict();
+    vi.mocked(api.createBoard).mockResolvedValue(meta("t9", { id: "copy" }));
+
+    await saveLatestAsNewBoard();
+
+    const [name, scene] = vi.mocked(api.createBoard).mock.calls[0] as [
+      string,
+      any,
+    ];
+    expect(name).toBe("Tablero 1 (copia de conflicto)");
+    expect(scene).toMatchObject({
+      type: "excalidraw",
+      elements: [{ id: "a", version: 5 }, { id: "img" }],
+      files: { f1: { dataURL: FILE.dataURL } },
+    });
+  });
+
+  it("stops warning about unsaved edits once they were kept elsewhere", async () => {
+    await conflict();
+    expect(hasUnsavedBoardChanges()).toBe(true); // would warn on leaving
+    discardUnsavedBoardEdits();
+    expect(hasUnsavedBoardChanges()).toBe(false);
+    expect(await settleBoardSaves()).toBe(true); // switching may proceed
+  });
+
+  it("refuses to make a copy when there is nothing to save", async () => {
+    await loadBoard();
+    await expect(saveLatestAsNewBoard()).rejects.toThrow();
+  });
+});
+
+describe("file format", () => {
+  // jsdom has no Blob#text() (every real browser does); test-only stand-in
+  beforeAll(() => {
+    if (!Blob.prototype.text) {
+      Blob.prototype.text = function text(this: Blob) {
+        return new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsText(this);
+        });
+      };
+    }
+  });
+
+  it("is a standard .excalidraw file: the editor's own Open can load it (as excalidraw.com does)", async () => {
+    await loadBoard();
+    vi.mocked(api.saveBoard).mockResolvedValue(meta("t2"));
+    await persistBoard(snap(2));
+
+    // exactly what the server stores for this board (it keeps the scene as is)
+    const stored = JSON.stringify(sentBody(0).scene);
+    const opened = await loadFromBlob(
+      new Blob([stored], { type: "application/json" }),
+      null,
+      null,
+    );
+
+    expect(opened.elements.map((el) => el.id).sort()).toEqual(["a", "img"]);
+    expect(opened.files["f1" as FileId]?.dataURL).toBe(FILE.dataURL);
+    expect(JSON.parse(stored)).toMatchObject({
+      type: "excalidraw",
+      version: 2,
+    });
   });
 });
