@@ -138,6 +138,8 @@ import {
 } from "./boards/boardPersistence";
 import { BoardRoute } from "./boards/BoardRoute";
 import { BoardSwitcher } from "./boards/BoardSwitcher";
+import { BoardsWelcomeScreen } from "./boards/BoardsWelcomeScreen";
+import { activeBoardAtom } from "./boards/boardsRoute";
 import { BoardsStatusBanner } from "./boards/BoardsStatusBanner";
 import { ShareDialog, shareDialogStateAtom } from "./share/ShareDialog";
 import CollabError, { collabErrorIndicatorAtom } from "./collab/CollabError";
@@ -400,6 +402,16 @@ const ExcalidrawWrapper = () => {
   const { editorTheme, appTheme, setAppTheme } = useHandleAppTheme();
 
   const [langCode, setLangCode] = useAppLangCode();
+
+  // [boards] exports are named after the board's title. The editor copies the
+  // `name` prop into its state only once, at mount (before the title is
+  // loaded), so it has to be set through the API.
+  const activeBoard = useAtomValue(activeBoardAtom);
+  useEffect(() => {
+    if (excalidrawAPI && activeBoard) {
+      excalidrawAPI.updateScene({ appState: { name: activeBoard.name } });
+    }
+  }, [excalidrawAPI, activeBoard]);
 
   const editorInterface = useEditorInterface();
 
@@ -1069,10 +1081,14 @@ const ExcalidrawWrapper = () => {
           theme={appTheme}
           refresh={() => forceRefresh((prev) => !prev)}
         />
-        <AppWelcomeScreen
-          onCollabDialogOpen={onCollabDialogOpen}
-          isCollabEnabled={!isCollabDisabled}
-        />
+        {BOARDS_PERSISTENCE_ENABLED ? (
+          <BoardsWelcomeScreen /> // [boards] the stock text claims browser storage
+        ) : (
+          <AppWelcomeScreen
+            onCollabDialogOpen={onCollabDialogOpen}
+            isCollabEnabled={!isCollabDisabled}
+          />
+        )}
         <OverwriteConfirmDialog>
           <OverwriteConfirmDialog.Actions.ExportToImage />
           <OverwriteConfirmDialog.Actions.SaveToDisk />
